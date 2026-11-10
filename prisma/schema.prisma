@@ -1,0 +1,57 @@
+// Modelo de datos del SaaS de rutas (versión personal, sin cobros).
+// Cambios: edita este archivo y corre en tu PC  npx prisma migrate dev --name <cambio>
+// El contenedor de la API aplica las migraciones pendientes al arrancar.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Cada app o sistema que consume la API de rutas.
+model Project {
+  id          String       @id @default(uuid())
+  name        String
+  description String?
+  active      Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  apiKeys     ApiKey[]
+  requestLogs RequestLog[]
+}
+
+/// API key de un proyecto. Solo se guarda el hash SHA-256; la key completa se muestra una vez.
+model ApiKey {
+  id         String    @id @default(uuid())
+  projectId  String
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name       String?
+  keyHash    String    @unique
+  keyPrefix  String
+  lastFour   String
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+
+  @@index([projectId])
+}
+
+/// Registro de cada petición a /v1. "units" es el peso de la petición
+/// (base para cobrar por uso en el futuro). Solo las respuestas exitosas suman unidades.
+model RequestLog {
+  id        Int      @id @default(autoincrement())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  apiKeyId  String?
+  service   String
+  profile   String
+  status    Int
+  latencyMs Int
+  units     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([projectId, createdAt])
+}

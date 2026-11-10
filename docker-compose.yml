@@ -1,12 +1,13 @@
-# Levanta los 3 contenedores del SaaS de rutas:
-#   postgres -> base de datos persistente (volumen "pgdata")
-#   osrm     -> motor de rutas con mapas de Bolivia (volumen "osrm_data"), solo red interna
-#   api      -> backend NestJS expuesto en el puerto 3009
+# Levanta los contenedores del SaaS de rutas:
+#   postgres  -> base de datos persistente (volumen "pgdata")
+#   osrm      -> motor de rutas para AUTO con el mapa de Bolivia (volumen "osrm_data")
+#   osrm-moto -> motor de rutas para MOTO con el mapa de Bolivia (volumen "osrm_moto_data")
+#   api       -> backend NestJS expuesto en el puerto 3009
 #
 # Uso:   docker compose up -d --build
 # Logs:  docker compose logs -f
 # Parar: docker compose down        (los datos NO se borran)
-# OJO:   docker compose down -v     (esto SÍ borra los volúmenes y la base de datos)
+# OJO:   docker compose down -v     (esto SÍ borra los volúmenes: base de datos y mapas)
 
 name: saas-rutas
 
@@ -22,7 +23,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      # Solo accesible desde tu PC (para Prisma Studio / migraciones). No se expone a la red.
+      # Solo accesible desde la propia máquina (Prisma Studio / migraciones). No se expone a la red.
       - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
@@ -32,6 +33,7 @@ services:
     networks:
       - rutas
 
+  # Motor de rutas para auto (perfil car.lua oficial de OSRM).
   osrm:
     build:
       context: ./docker/osrm
@@ -40,13 +42,12 @@ services:
     container_name: rutas-osrm
     restart: unless-stopped
     environment:
-      OSRM_PROFILE: ${OSRM_PROFILE:-car}
+      OSRM_PROFILE: car
       OSRM_REGION: bolivia
       OSRM_PBF_URL: https://download.geofabrik.de/south-america/bolivia-latest.osm.pbf
     volumes:
       - osrm_data:/data
-    # Solo accesible desde tu PC (para correr el back con "npm run start:dev" fuera de Docker).
-    # Dentro de Docker la API lo usa como http://osrm:5000. No se expone a la red.
+    # Solo accesible desde la propia máquina. La API lo usa por la red interna como http://osrm:5000.
     ports:
       - "127.0.0.1:${OSRM_HOST_PORT:-5000}:5000"
     healthcheck:
@@ -55,6 +56,32 @@ services:
       timeout: 5s
       retries: 3
       # El primer arranque descarga y procesa el mapa: puede tardar varios minutos.
+      start_period: 30m
+    networks:
+      - rutas
+
+  # Motor de rutas para moto (perfil propio docker/osrm/profiles/moto.lua).
+  osrm-moto:
+    build:
+      context: ./docker/osrm
+      args:
+        OSRM_VERSION: ${OSRM_VERSION:-v26.10.0-debian}
+    container_name: rutas-osrm-moto
+    restart: unless-stopped
+    environment:
+      OSRM_PROFILE: moto
+      OSRM_REGION: bolivia
+      OSRM_PBF_URL: https://download.geofabrik.de/south-america/bolivia-latest.osm.pbf
+    volumes:
+      - osrm_moto_data:/data
+    # Solo accesible desde la propia máquina. La API lo usa por la red interna como http://osrm-moto:5000.
+    ports:
+      - "127.0.0.1:${OSRM_MOTO_HOST_PORT:-5001}:5000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:5000/nearest/v1/driving/-68.1193,-16.4897' > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
       start_period: 30m
     networks:
       - rutas
@@ -73,13 +100,16 @@ services:
       PORT: 3009
       # Dentro de Docker la base se llama "postgres" (no localhost) y usa el puerto interno 5432.
       DATABASE_URL: postgresql://${POSTGRES_USER:-rutas}:${POSTGRES_PASSWORD:-rutas_dev_cambiar}@postgres:5432/${POSTGRES_DB:-rutas}?schema=public
-      OSRM_URL: http://osrm:5000
+      OSRM_CAR_URL: http://osrm:5000
+      OSRM_MOTO_URL: http://osrm-moto:5000
     ports:
       - "3009:3009"
     depends_on:
       postgres:
         condition: service_healthy
       osrm:
+        condition: service_started
+      osrm-moto:
         condition: service_started
     networks:
       - rutas
@@ -91,3 +121,4 @@ networks:
 volumes:
   pgdata:
   osrm_data:
+  osrm_moto_data:

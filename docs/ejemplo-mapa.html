@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prueba de rutas</title>
+  <!-- Leaflet: librería gratuita para mapas. Fondo de mapa: tiles de OpenStreetMap. -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
+    #map { position: absolute; inset: 0; }
+    #panel { position: absolute; z-index: 1000; top: 12px; left: 56px; right: 12px; max-width: 420px;
+             background: #fff; padding: 12px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
+    #panel input, #panel select, #panel button { font: inherit; margin: 4px 0; }
+    #panel input { width: 100%; box-sizing: border-box; }
+    #info { margin-top: 6px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="panel">
+    <!-- Solo para pruebas: en una app pública no pongas la API key en el navegador. -->
+    <input id="api" value="http://localhost:3009" placeholder="URL de la API">
+    <input id="key" placeholder="API key (rk_...)">
+    <select id="profile"><option value="moto">Moto</option><option value="car">Auto</option></select>
+    <button id="clear">Limpiar</button>
+    <div id="info">Haz clic en el mapa para marcar origen y destino.</div>
+  </div>
+
+  <script>
+    const map = L.map('map').setView([-16.5, -68.13], 13); // La Paz
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    }).addTo(map);
+
+    let points = [];
+    let layers = [];
+    const info = document.getElementById('info');
+
+    function clearAll() {
+      layers.forEach((l) => map.removeLayer(l));
+      layers = [];
+      points = [];
+      info.textContent = 'Haz clic en el mapa para marcar origen y destino.';
+    }
+
+    async function drawRoute() {
+      const api = document.getElementById('api').value.replace(/\/+$/, '');
+      const key = document.getElementById('key').value.trim();
+      const profile = document.getElementById('profile').value;
+      const coords = points.map((p) => `${p.lng.toFixed(6)},${p.lat.toFixed(6)}`).join(';');
+
+      info.textContent = 'Calculando...';
+      const res = await fetch(`${api}/v1/route/${profile}/${coords}`, { headers: { 'x-api-key': key } });
+      const data = await res.json();
+      if (!res.ok || data.code !== 'Ok') {
+        info.textContent = `Error: ${data.code} — ${data.message ?? ''}`;
+        return;
+      }
+
+      const route = data.routes[0];
+      // route.geometry ya viene en GeoJSON: Leaflet lo dibuja directamente.
+      const line = L.geoJSON(route.geometry, { style: { color: profile === 'moto' ? '#e8590c' : '#1c7ed6', weight: 5 } }).addTo(map);
+      layers.push(line);
+      map.fitBounds(line.getBounds(), { padding: [40, 40] });
+
+      const km = (route.distance / 1000).toFixed(2);
+      const min = Math.round(route.duration / 60);
+      info.textContent = `${profile === 'moto' ? 'Moto' : 'Auto'}: ${km} km · ${min} min`;
+    }
+
+    map.on('click', (e) => {
+      if (points.length === 2) clearAll();
+      points.push(e.latlng);
+      layers.push(L.marker(e.latlng).addTo(map));
+      if (points.length === 2) drawRoute().catch((err) => (info.textContent = `Error: ${err.message}`));
+    });
+    document.getElementById('clear').onclick = clearAll;
+  </script>
+</body>
+</html>

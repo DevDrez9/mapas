@@ -14,9 +14,9 @@ describe('AppController', () => {
     appController = app.get<AppController>(AppController);
   });
 
-  describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(appController.getHello()).toBe('Hello World!');
-    });
+  it('devuelve la información del servicio', () => {
+    const info = appController.getInfo();
+    expect(info.status).toBe('ok');
+    expect(info.profiles).toEqual(['car', 'moto']);
   });
 });
