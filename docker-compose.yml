@@ -1,0 +1,93 @@
+# Levanta los 3 contenedores del SaaS de rutas:
+#   postgres -> base de datos persistente (volumen "pgdata")
+#   osrm     -> motor de rutas con mapas de Bolivia (volumen "osrm_data"), solo red interna
+#   api      -> backend NestJS expuesto en el puerto 3009
+#
+# Uso:   docker compose up -d --build
+# Logs:  docker compose logs -f
+# Parar: docker compose down        (los datos NO se borran)
+# OJO:   docker compose down -v     (esto SÍ borra los volúmenes y la base de datos)
+
+name: saas-rutas
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: rutas-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rutas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rutas_dev_cambiar}
+      POSTGRES_DB: ${POSTGRES_DB:-rutas}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Solo accesible desde tu PC (para Prisma Studio / migraciones). No se expone a la red.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - rutas
+
+  osrm:
+    build:
+      context: ./docker/osrm
+      args:
+        OSRM_VERSION: ${OSRM_VERSION:-v26.10.0-debian}
+    container_name: rutas-osrm
+    restart: unless-stopped
+    environment:
+      OSRM_PROFILE: ${OSRM_PROFILE:-car}
+      OSRM_REGION: bolivia
+      OSRM_PBF_URL: https://download.geofabrik.de/south-america/bolivia-latest.osm.pbf
+    volumes:
+      - osrm_data:/data
+    # Solo accesible desde tu PC (para correr el back con "npm run start:dev" fuera de Docker).
+    # Dentro de Docker la API lo usa como http://osrm:5000. No se expone a la red.
+    ports:
+      - "127.0.0.1:${OSRM_HOST_PORT:-5000}:5000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:5000/nearest/v1/driving/-68.1193,-16.4897' > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # El primer arranque descarga y procesa el mapa: puede tardar varios minutos.
+      start_period: 30m
+    networks:
+      - rutas
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rutas-api
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NODE_ENV: production
+      PORT: 3009
+      # Dentro de Docker la base se llama "postgres" (no localhost) y usa el puerto interno 5432.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-rutas}:${POSTGRES_PASSWORD:-rutas_dev_cambiar}@postgres:5432/${POSTGRES_DB:-rutas}?schema=public
+      OSRM_URL: http://osrm:5000
+    ports:
+      - "3009:3009"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      osrm:
+        condition: service_started
+    networks:
+      - rutas
+
+networks:
+  rutas:
+    driver: bridge
+
+volumes:
+  pgdata:
+  osrm_data:
